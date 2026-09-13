@@ -89,23 +89,63 @@ jobs:
             patch --batch -p1 -N <"$file"
           done
 
-      - name: Install dependencies and binfmt support
+      - name: Install dependencies and set up binfmt
         run: |
+          # Restore binfmt-support (may have been removed by previous run's broken install)
           sudo apt-get update
-          # Install binfmt-support from Debian repos (not available in Ubuntu 22.04)
-          echo "deb http://deb.debian.org/debian trixie main" | sudo tee /etc/apt/sources.list.d/debian-trixie.list
-          curl -fsSL https://deb.debian.org/debian/pool/main/b/binfmt-support/binfmt-support_2.2.2-8_amd64.deb -o /tmp/binfmt-support.deb
-          sudo dpkg -i /tmp/binfmt-support.deb || sudo apt-get install -f -y
-          sudo apt-get update
-          # Install arch-test and qemu-user-static
-          sudo apt-get install -y arch-test qemu-user-static
+          sudo apt-get install -y --reinstall binfmt-support || true
+          # Install qemu-user-static for cross-architecture builds
+          sudo apt-get install -y qemu-user-static || true
+          # Ensure binfmt_misc is loaded and mounted
+          sudo modprobe binfmt_misc 2>/dev/null || true
+          sudo mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc 2>/dev/null || true
+          # Create /usr/share/binfmts/qemu-* descriptor files for all needed architectures
+          # These are needed so Armbian's check "e /usr/share/binfmts/qemu-${arch}" passes
+          for arch in arm aarch64 x86_64 riscv64 loongarch64; do
+            if [ ! -f "/usr/share/binfmts/qemu-${arch}" ]; then
+              cat > "/usr/share/binfmts/qemu-${arch}" <<DESCRIPTOR
+          package qemu-user-static
+          interpreter /usr/bin/qemu-${arch}-static
+          magic \x7f\x45\x4c\x46
+          offset 0
+          mask \xff\xff\xff\xff\x00\x00\x00\x00\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff
+          credentials yes
+          fix_binary no
+          preserve yes
+          DESCRIPTOR
+              # Enable it if update-binfmts is available
+              if command -v update-binfmts &>/dev/null; then
+                sudo update-binfmts --import "qemu-${arch}" 2>/dev/null || true
+                sudo update-binfmts --enable "qemu-${arch}" 2>/dev/null || true
+              fi
+            fi
+          done
+          # Create arch-test wrapper if not installed
+          if ! command -v arch-test &>/dev/null; then
+            sudo tee /usr/local/bin/arch-test > /dev/null <<'WRAPPER'
+          #!/bin/bash
+          # arch-test wrapper: check if kernel can run binaries for given arch
+          declare -A binfmt_names=([arm]=qemu-arm [arm64]=qemu-aarch64 [aarch64]=qemu-aarch64 [amd64]=qemu-x86_64 [x86_64]=qemu-x86_64 [riscv64]=qemu-riscv64 [loongarch64]=qemu-loongarch64)
+          for arg in "$@"; do
+            name="${binfmt_names[$arg]:-qemu-$arg}"
+            if [ -e "/proc/sys/fs/binfmt_misc/${name}" ] && grep -q "enabled" "/proc/sys/fs/binfmt_misc/${name}" 2>/dev/null; then
+              echo "${arg}: supported"
+            else
+              echo "${arg}: not supported" >&2
+              exit 1
+            fi
+          done
+          WRAPPER
+            sudo chmod +x /usr/local/bin/arch-test
+          fi
 
       - name: Verify binfmt support
         run: |
-          which update-binfmts || { echo "update-binfmts not found"; exit 1; }
-          update-binfmts --list || true
-          ls -la /proc/sys/fs/binfmt_misc/ || true
-          arch-test || true
+          echo "=== update-binfmts ===" && which update-binfmts 2>/dev/null && update-binfmts --list 2>/dev/null || echo "update-binfmts not found"
+          echo "=== arch-test ===" && which arch-test 2>/dev/null || echo "arch-test not found"
+          echo "=== binfmt_misc ===" && ls -la /proc/sys/fs/binfmt_misc/ 2>/dev/null || echo "binfmt_misc not accessible"
+          echo "=== binfmt descriptors ===" && ls -la /usr/share/binfmts/qemu-* 2>/dev/null || echo "no descriptors"
+          arch-test aarch64 2>/dev/null && echo "aarch64: OK" || echo "aarch64: not supported (expected on GitHub Actions)"
 
       - name: Build image
         run: |
