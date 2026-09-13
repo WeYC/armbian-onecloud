@@ -12,7 +12,7 @@ env:
   SCRIPT_REPO: ${{ github.repository }}
   SCRIPT_REF: ${{ github.ref_name }}
   UBOOT_REPO: hzyitc/u-boot-onecloud
-  UBOOT_TAG: build-20221028-0940
+  UBOOT_RELEASE: latest
   UBOOT_BURNIMG: eMMC.burn.img
   ARMBIAN_REPO: armbian/build
   ARMBIAN_REF: main
@@ -30,17 +30,17 @@ jobs:
     steps:
       - id: get
         name: Get repositories information
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TIME="$(curl -H "Authorization: token $GH_TOKEN" https://api.github.com/repos/${SCRIPT_REPO}/actions/runs/${GITHUB_RUN_ID} | jq -r .created_at)"
+          TIME="$(curl https://api.github.com/repos/${SCRIPT_REPO}/actions/runs/${GITHUB_RUN_ID} | jq -r .created_at)"
           TAG="ci-$(date -d "${TIME}" -u +'%Y%m%d-%H%M%S-%Z')"
-          SCRIPT_SHA=$(curl -H "Authorization: token $GH_TOKEN" https://api.github.com/repos/${SCRIPT_REPO}/commits/${SCRIPT_REF} | jq -r .sha)
-          ARMBIAN_SHA=$(curl -H "Authorization: token $GH_TOKEN" https://api.github.com/repos/${ARMBIAN_REPO}/commits/${ARMBIAN_REF} | jq -r .sha)
+          SCRIPT_SHA=$(curl https://api.github.com/repos/${SCRIPT_REPO}/commits/${SCRIPT_REF} | jq -r .sha)
+          UBOOT_TAG=$(curl https://api.github.com/repos/${UBOOT_REPO}/releases/${UBOOT_RELEASE} | jq -r .tag_name)
+          ARMBIAN_SHA=$(curl https://api.github.com/repos/${ARMBIAN_REPO}/commits/${ARMBIAN_REF} | jq -r .sha)
           cat <<EOF | sed -E 's/^  //' >>$GITHUB_ENV
             TIME=$TIME
             TAG=$TAG
             SCRIPT_SHA=$SCRIPT_SHA
+            UBOOT_TAG=$UBOOT_TAG
             ARMBIAN_SHA=$ARMBIAN_SHA
           EOF
           echo "env=$(cat $GITHUB_ENV | base64 -w 0)" >>$GITHUB_OUTPUT
@@ -49,7 +49,7 @@ jobs:
         run: |
           echo -e "Time: $(date -d "$TIME" +'%Y-%m-%d %H:%M:%S %Z')"
           echo "Script: ${SCRIPT_REPO}@${SCRIPT_REF}"
-          echo "U-Boot: ${UBOOT_REPO}@${UBOOT_TAG}"
+          echo "U-Boot: ${UBOOT_REPO}@${UBOOT_RELEASE} (${UBOOT_TAG})"
           echo "Armbian: ${ARMBIAN_REPO}@${ARMBIAN_REF}"
 
       - name: Create release
