@@ -30,12 +30,14 @@ jobs:
     steps:
       - id: get
         name: Get repositories information
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TIME="$(curl https://api.github.com/repos/${SCRIPT_REPO}/actions/runs/${GITHUB_RUN_ID} | jq -r .created_at)"
+          TIME="$(curl -H "Authorization: token $GH_TOKEN" https://api.github.com/repos/${SCRIPT_REPO}/actions/runs/${GITHUB_RUN_ID} | jq -r .created_at)"
           TAG="ci-$(date -d "${TIME}" -u +'%Y%m%d-%H%M%S-%Z')"
-          SCRIPT_SHA=$(curl https://api.github.com/repos/${SCRIPT_REPO}/commits/${SCRIPT_REF} | jq -r .sha)
-          UBOOT_TAG=$(curl https://api.github.com/repos/${UBOOT_REPO}/releases/${UBOOT_RELEASE} | jq -r .tag_name)
-          ARMBIAN_SHA=$(curl https://api.github.com/repos/${ARMBIAN_REPO}/commits/${ARMBIAN_REF} | jq -r .sha)
+          SCRIPT_SHA=$(curl -H "Authorization: token $GH_TOKEN" https://api.github.com/repos/${SCRIPT_REPO}/commits/${SCRIPT_REF} | jq -r .sha)
+          UBOOT_TAG=$(curl -H "Authorization: token $GH_TOKEN" https://api.github.com/repos/${UBOOT_REPO}/releases/${UBOOT_RELEASE} | jq -r .tag_name)
+          ARMBIAN_SHA=$(curl -H "Authorization: token $GH_TOKEN" https://api.github.com/repos/${ARMBIAN_REPO}/commits/${ARMBIAN_REF} | jq -r .sha)
           cat <<EOF | sed -E 's/^  //' >>$GITHUB_ENV
             TIME=$TIME
             TAG=$TAG
@@ -91,17 +93,12 @@ jobs:
 
       - name: Install dependencies and set up binfmt
         run: |
-          # Restore binfmt-support (may have been removed by previous run's broken install)
           sudo apt-get update
-          sudo apt-get install -y --reinstall binfmt-support || true
-          # Install qemu-user-static for cross-architecture builds
           sudo apt-get install -y qemu-user-static || true
-          # Ensure binfmt_misc is loaded and mounted
           sudo modprobe binfmt_misc 2>/dev/null || true
           sudo mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc 2>/dev/null || true
-          # Create /usr/share/binfmts/qemu-* descriptor files for all needed architectures
-          # These are needed so Armbian's check "e /usr/share/binfmts/qemu-${arch}" passes
-          for arch in arm aarch64 x86_64 riscv64 loongarch64; do
+          # Create binfmt descriptors only for arm/aarch64 (needed for cross-compilation)
+          for arch in arm aarch64; do
             if [ ! -f "/usr/share/binfmts/qemu-${arch}" ]; then
               cat > "/usr/share/binfmts/qemu-${arch}" <<DESCRIPTOR
           package qemu-user-static
@@ -113,23 +110,14 @@ jobs:
           fix_binary no
           preserve yes
           DESCRIPTOR
-              # Enable it if update-binfmts is available
-              if command -v update-binfmts &>/dev/null; then
-                sudo update-binfmts --import "qemu-${arch}" 2>/dev/null || true
-                sudo update-binfmts --enable "qemu-${arch}" 2>/dev/null || true
-              fi
             fi
           done
-          # Create arch-test wrapper that properly maps arch names to binfmt entries
+          # Create arch-test wrapper
           sudo tee /usr/local/bin/arch-test > /dev/null <<'WRAPPER'
           #!/bin/bash
-          # arch-test wrapper: map arch names to binfmt_misc entries and check support
           declare -A binfmt_names=(
             [arm]=qemu-arm [armhf]=qemu-arm [arm32]=qemu-arm
             [arm64]=qemu-aarch64 [aarch64]=qemu-aarch64
-            [amd64]=qemu-x86_64 [x86_64]=qemu-x86_64
-            [riscv64]=qemu-riscv64 [riscv]=qemu-riscv64
-            [loongarch64]=qemu-loongarch64 [loongarch]=qemu-loongarch64
           )
           exit_code=0
           for arg in "$@"; do
@@ -147,11 +135,9 @@ jobs:
 
       - name: Verify binfmt support
         run: |
-          echo "=== update-binfmts ===" && which update-binfmts 2>/dev/null && update-binfmts --list 2>/dev/null || echo "update-binfmts not found"
-          echo "=== arch-test ===" && which arch-test 2>/dev/null || echo "arch-test not found"
-          echo "=== binfmt_misc ===" && ls -la /proc/sys/fs/binfmt_misc/ 2>/dev/null || echo "binfmt_misc not accessible"
-          echo "=== binfmt descriptors ===" && ls -la /usr/share/binfmts/qemu-* 2>/dev/null || echo "no descriptors"
-          arch-test aarch64 2>/dev/null && echo "aarch64: OK" || echo "aarch64: not supported (expected on GitHub Actions)"
+          echo "=== binfmt_misc ===" && ls /proc/sys/fs/binfmt_misc/qemu-* 2>/dev/null || echo "no binfmt entries"
+          echo "=== arch-test ===" && arch-test armhf 2>/dev/null && echo "armhf: OK" || echo "armhf: not available"
+          arch-test aarch64 2>/dev/null && echo "aarch64: OK" || echo "aarch64: not available"
 
       - name: Build image
         run: |
