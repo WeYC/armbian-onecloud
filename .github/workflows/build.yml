@@ -120,24 +120,30 @@ jobs:
               fi
             fi
           done
-          # Create arch-test wrapper if not installed
-          if ! command -v arch-test &>/dev/null; then
-            sudo tee /usr/local/bin/arch-test > /dev/null <<'WRAPPER'
+          # Create arch-test wrapper that properly maps arch names to binfmt entries
+          sudo tee /usr/local/bin/arch-test > /dev/null <<'WRAPPER'
           #!/bin/bash
-          # arch-test wrapper: check if kernel can run binaries for given arch
-          declare -A binfmt_names=([arm]=qemu-arm [arm64]=qemu-aarch64 [aarch64]=qemu-aarch64 [amd64]=qemu-x86_64 [x86_64]=qemu-x86_64 [riscv64]=qemu-riscv64 [loongarch64]=qemu-loongarch64)
+          # arch-test wrapper: map arch names to binfmt_misc entries and check support
+          declare -A binfmt_names=(
+            [arm]=qemu-arm [armhf]=qemu-arm [arm32]=qemu-arm
+            [arm64]=qemu-aarch64 [aarch64]=qemu-aarch64
+            [amd64]=qemu-x86_64 [x86_64]=qemu-x86_64
+            [riscv64]=qemu-riscv64 [riscv]=qemu-riscv64
+            [loongarch64]=qemu-loongarch64 [loongarch]=qemu-loongarch64
+          )
+          exit_code=0
           for arg in "$@"; do
             name="${binfmt_names[$arg]:-qemu-$arg}"
             if [ -e "/proc/sys/fs/binfmt_misc/${name}" ] && grep -q "enabled" "/proc/sys/fs/binfmt_misc/${name}" 2>/dev/null; then
               echo "${arg}: supported"
             else
               echo "${arg}: not supported" >&2
-              exit 1
+              exit_code=1
             fi
           done
+          exit $exit_code
           WRAPPER
-            sudo chmod +x /usr/local/bin/arch-test
-          fi
+          sudo chmod +x /usr/local/bin/arch-test
 
       - name: Verify binfmt support
         run: |
