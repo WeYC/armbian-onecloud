@@ -231,10 +231,11 @@ jobs:
       - name: Setup QEMU binfmts
         run: |
           sudo apt install -y qemu-user-static binfmts-support
-          sudo systemctl restart systemd-binfmt || true
-          sudo update-binfmts --enable qemu-aarch64 || true
-          sudo update-binfmts --enable qemu-arm || true
-          sudo update-binfmts --enable qemu-amd64 || true || true
+          sudo mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc 2>/dev/null || true
+          sudo update-binfmts --enable qemu-aarch64 2>/dev/null || true
+          sudo update-binfmts --enable qemu-arm 2>/dev/null || true
+          sudo update-binfmts --enable qemu-amd64 2>/dev/null || true
+          sudo update-binfmts --enable qemu-loongarch64 2>/dev/null || true
 
       - name: Download debs
         uses: actions/download-artifact@v4
@@ -257,7 +258,7 @@ jobs:
               BUILD_DESKTOP=no \
               EXPERT=yes \
               SKIP_EXTERNAL_TOOLCHAINS=yes \
-              CLEAN_LEVEL= \
+              CLEAN_LEVEL=make \
               USE_CCACHE=no \
               COMPRESS_OUTPUTIMAGE=img
           sudo chown $(id -u):$(id -g) -R output/
