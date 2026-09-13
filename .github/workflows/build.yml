@@ -95,32 +95,7 @@ jobs:
           sudo modprobe binfmt_misc 2>/dev/null || true
           sudo mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc 2>/dev/null || true
           # Create update-binfmts wrapper (binfmt-support package doesn't exist on Ubuntu)
-          sudo tee /usr/local/bin/update-binfmts > /dev/null << 'WRAPPER'
-#!/bin/bash
-# Minimal update-binfmts wrapper for Ubuntu
-case "$1" in
-  --enable)
-    name="$2"
-    # Try to find the qemu binary
-    arch="${name#qemu-}"
-    qemu="/usr/bin/qemu-${arch}"
-    if [ -f "$qemu" ] || [ -L "$qemu" ]; then
-      echo "Registered $name"
-    fi
-    exit 0
-    ;;
-  --disable)
-    exit 0
-    ;;
-  --list)
-    ls /proc/sys/fs/binfmt_misc/ 2>/dev/null || true
-    exit 0
-    ;;
-  *)
-    exit 0
-    ;;
-esac
-WRAPPER
+          printf '%s\n' '#!/bin/bash' 'case "$1" in' '  --enable) exit 0 ;;' '  --disable) exit 0 ;;' '  --list) ls /proc/sys/fs/binfmt_misc/ 2>/dev/null || true; exit 0 ;;' '  *) exit 0 ;;' 'esac' | sudo tee /usr/local/bin/update-binfmts > /dev/null
           sudo chmod +x /usr/local/bin/update-binfmts
           sudo ln -sf /usr/local/bin/update-binfmts /usr/bin/update-binfmts
           sudo update-binfmts --enable qemu-aarch64
