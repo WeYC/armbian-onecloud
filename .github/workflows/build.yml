@@ -97,12 +97,11 @@ jobs:
           sudo apt-get install -y qemu-user-static || true
           sudo modprobe binfmt_misc 2>/dev/null || true
           sudo mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc 2>/dev/null || true
-          # Create binfmt descriptors only for arm/aarch64 (needed for cross-compilation)
-          for arch in arm aarch64; do
-            if [ ! -f "/usr/share/binfmts/qemu-${arch}" ]; then
-              cat > "/usr/share/binfmts/qemu-${arch}" <<DESCRIPTOR
+          # Create binfmt descriptor only for arm (S805 is armhf, 32-bit ARM)
+          if [ ! -f "/usr/share/binfmts/qemu-arm" ]; then
+            cat > "/usr/share/binfmts/qemu-arm" <<'DESCRIPTOR'
           package qemu-user-static
-          interpreter /usr/bin/qemu-${arch}-static
+          interpreter /usr/bin/qemu-arm-static
           magic \x7f\x45\x4c\x46
           offset 0
           mask \xff\xff\xff\xff\x00\x00\x00\x00\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff
@@ -110,34 +109,25 @@ jobs:
           fix_binary no
           preserve yes
           DESCRIPTOR
-            fi
-          done
+          fi
           # Create arch-test wrapper
           sudo tee /usr/local/bin/arch-test > /dev/null <<'WRAPPER'
           #!/bin/bash
-          declare -A binfmt_names=(
-            [arm]=qemu-arm [armhf]=qemu-arm [arm32]=qemu-arm
-            [arm64]=qemu-aarch64 [aarch64]=qemu-aarch64
-          )
-          exit_code=0
           for arg in "$@"; do
-            name="${binfmt_names[$arg]:-qemu-$arg}"
-            if [ -e "/proc/sys/fs/binfmt_misc/${name}" ] && grep -q "enabled" "/proc/sys/fs/binfmt_misc/${name}" 2>/dev/null; then
+            if [ -e "/proc/sys/fs/binfmt_misc/qemu-arm" ] && grep -q "enabled" "/proc/sys/fs/binfmt_misc/qemu-arm" 2>/dev/null; then
               echo "${arg}: supported"
             else
               echo "${arg}: not supported" >&2
-              exit_code=1
+              exit 1
             fi
           done
-          exit $exit_code
           WRAPPER
           sudo chmod +x /usr/local/bin/arch-test
 
       - name: Verify binfmt support
         run: |
-          echo "=== binfmt_misc ===" && ls /proc/sys/fs/binfmt_misc/qemu-* 2>/dev/null || echo "no binfmt entries"
+          echo "=== binfmt_misc ===" && ls /proc/sys/fs/binfmt_misc/qemu-arm 2>/dev/null && echo "qemu-arm: OK" || echo "qemu-arm: not found"
           echo "=== arch-test ===" && arch-test armhf 2>/dev/null && echo "armhf: OK" || echo "armhf: not available"
-          arch-test aarch64 2>/dev/null && echo "aarch64: OK" || echo "aarch64: not available"
 
       - name: Build image
         run: |
