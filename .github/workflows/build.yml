@@ -89,19 +89,23 @@ jobs:
             patch --batch -p1 -N <"$file"
           done
 
-      - name: Install QEMU and binfmts
+      - name: Install dependencies and binfmt support
         run: |
-          sudo apt install -y qemu-user-static
-          sudo modprobe binfmt_misc 2>/dev/null || true
-          sudo mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc 2>/dev/null || true
-          # Create update-binfmts wrapper (binfmt-support package doesn't exist on Ubuntu)
-          printf '%s\n' '#!/bin/bash' 'case "$1" in' '  --enable) exit 0 ;;' '  --disable) exit 0 ;;' '  --list) ls /proc/sys/fs/binfmt_misc/ 2>/dev/null || true; exit 0 ;;' '  *) exit 0 ;;' 'esac' | sudo tee /usr/local/bin/update-binfmts > /dev/null
-          sudo chmod +x /usr/local/bin/update-binfmts
-          sudo ln -sf /usr/local/bin/update-binfmts /usr/bin/update-binfmts
-          sudo update-binfmts --enable qemu-aarch64
-          sudo update-binfmts --enable qemu-arm
-          sudo update-binfmts --enable qemu-amd64
-          sudo update-binfmts --enable qemu-loongarch64
+          sudo apt-get update
+          # Install binfmt-support from Debian repos (not available in Ubuntu 22.04)
+          echo "deb http://deb.debian.org/debian trixie main" | sudo tee /etc/apt/sources.list.d/debian-trixie.list
+          curl -fsSL https://deb.debian.org/debian/pool/main/b/binfmt-support/binfmt-support_2.2.2-8_amd64.deb -o /tmp/binfmt-support.deb
+          sudo dpkg -i /tmp/binfmt-support.deb || sudo apt-get install -f -y
+          sudo apt-get update
+          # Install arch-test and qemu-user-static
+          sudo apt-get install -y arch-test qemu-user-static
+
+      - name: Verify binfmt support
+        run: |
+          which update-binfmts || { echo "update-binfmts not found"; exit 1; }
+          update-binfmts --list || true
+          ls -la /proc/sys/fs/binfmt_misc/ || true
+          arch-test || true
 
       - name: Build image
         run: |
