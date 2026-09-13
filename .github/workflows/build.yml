@@ -84,6 +84,18 @@ jobs:
             patch --batch -p1 -N <"$file"
           done
 
+      - name: Install QEMU and binfmts
+        run: |
+          sudo apt install -y qemu-user-static binfmts-support
+          sudo modprobe binfmt_misc 2>/dev/null || true
+          sudo mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc 2>/dev/null || true
+          sudo update-binfmts --enable qemu-aarch64 2>/dev/null || true
+          sudo update-binfmts --enable qemu-arm 2>/dev/null || true
+          sudo update-binfmts --enable qemu-amd64 2>/dev/null || true
+          sudo update-binfmts --enable qemu-loongarch64 2>/dev/null || true
+          # Verify qemu-loongarch64 binary exists
+          ls /usr/bin/qemu-loongarch64 2>/dev/null || sudo apt install -y qemu-user-static
+
       - name: Build image
         run: |
           export GITHUB_ACTIONS=false
