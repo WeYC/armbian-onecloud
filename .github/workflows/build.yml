@@ -11,7 +11,7 @@ on:
 env:
   SCRIPT_REPO: ${{ github.repository }}
   SCRIPT_REF: ${{ github.ref_name }}
-  UBOOT_REPO: hzyitc/u-boot
+  UBOOT_REPO: hzyitc/u-boot-onecloud
   UBOOT_RELEASE: latest
   UBOOT_BURNIMG: eMMC.burn.img
   ARMBIAN_REPO: armbian/build
@@ -27,55 +27,59 @@ jobs:
     runs-on: ubuntu-22.04
     outputs:
       env: ${{ steps.get.outputs.env }}
+      tag: ${{ steps.get.outputs.tag }}
     steps:
       - id: get
         name: Get repositories information
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TIME="$(curl -H "Authorization: token $GH_TOKEN" https://api.github.com/repos/${SCRIPT_REPO}/actions/runs/${GITHUB_RUN_ID} | jq -r .created_at)"
-          TAG="ci-$(date -d "${TIME}" -u +'%Y%m%d-%H%M%S-%Z')"
-          SCRIPT_SHA=$(curl -H "Authorization: token $GH_TOKEN" https://api.github.com/repos/${SCRIPT_REPO}/commits/${SCRIPT_REF} | jq -r .sha)
-          UBOOT_TAG=$(curl -H "Authorization: token $GH_TOKEN" https://api.github.com/repos/${UBOOT_REPO}/releases/${UBOOT_RELEASE} | jq -r .tag_name)
-          ARMBIAN_SHA=$(curl -H "Authorization: token $GH_TOKEN" https://api.github.com/repos/${ARMBIAN_REPO}/commits/${ARMBIAN_REF} | jq -r .sha)
-          cat <<EOF | sed -E 's/^  //' >>$GITHUB_ENV
-            TIME=$TIME
-            TAG=$TAG
-            SCRIPT_SHA=$SCRIPT_SHA
-            UBOOT_TAG=$UBOOT_TAG
-            ARMBIAN_SHA=$ARMBIAN_SHA
-          EOF
-          echo "env=$(cat $GITHUB_ENV | base64 -w 0)" >>$GITHUB_OUTPUT
+          set -euo pipefail
+          api_get() {
+            curl -fsSL \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "$1"
+          }
+          TIME="$(api_get "https://api.github.com/repos/${SCRIPT_REPO}/actions/runs/${GITHUB_RUN_ID}" | jq -r '.created_at // empty' || true)"
+          if [ -z "${TIME}" ]; then
+            TIME="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          fi
+          TAG="v$(date -d "${TIME}" -u +'%Y.%m.%d-%H%M')"
+          SCRIPT_SHA="$(api_get "https://api.github.com/repos/${SCRIPT_REPO}/commits/${SCRIPT_REF}" | jq -r '.sha // empty' || true)"
+          [ -n "${SCRIPT_SHA}" ] || SCRIPT_SHA="${GITHUB_SHA}"
+          UBOOT_TAG="$(api_get "https://api.github.com/repos/${UBOOT_REPO}/releases/${UBOOT_RELEASE}" | jq -r '.tag_name // empty' || true)"
+          [ -n "${UBOOT_TAG}" ] || { echo "::error::Failed to resolve U-Boot release tag"; exit 1; }
+          ARMBIAN_SHA="$(api_get "https://api.github.com/repos/${ARMBIAN_REPO}/commits/${ARMBIAN_REF}" | jq -r '.sha // empty' || true)"
+          [ -n "${ARMBIAN_SHA}" ] || { echo "::error::Failed to resolve Armbian commit SHA"; exit 1; }
+          {
+            echo "TIME=${TIME}"
+            echo "TAG=${TAG}"
+            echo "SCRIPT_SHA=${SCRIPT_SHA}"
+            echo "UBOOT_TAG=${UBOOT_TAG}"
+            echo "ARMBIAN_SHA=${ARMBIAN_SHA}"
+          } >> "$GITHUB_ENV"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "env=$(base64 -w 0 < "$GITHUB_ENV")" >> "$GITHUB_OUTPUT"
 
-      - name: Show repositories information
-        run: |
-          echo -e "Time: $(date -d "$TIME" +'%Y-%m-%d %H:%M:%S %Z')"
-          echo "Script: ${SCRIPT_REPO}@${SCRIPT_REF}"
-          echo "U-Boot: ${UBOOT_REPO}@${UBOOT_RELEASE} (${UBOOT_TAG})"
-          echo "Armbian: ${ARMBIAN_REPO}@${ARMBIAN_REF}"
-
-      - name: Create release
+      - name: Create release placeholder
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ env.TAG }}
+          tag_name: ${{ steps.get.outputs.tag }}
           target_commitish: ${{ github.sha }}
-          name: ${{ env.TAG }}
+          name: OneCloud Armbian ${{ steps.get.outputs.tag }}
           draft: true
 
-  build:
-    name: Build ${{ matrix.RELEASE }}
+  build-kernel:
+    name: Build kernel
     needs: prepare
     runs-on: ubuntu-22.04
     strategy:
-      fail-fast: false
       matrix:
-        RELEASE:
-          - trixie
-          - resolute
+        BRANCH: [current]
     steps:
       - name: Import env
-        run: |
-          echo "$(echo "${{ needs.prepare.outputs.env }}" | base64 -d)" >>$GITHUB_ENV
+        run: echo "${{ needs.prepare.outputs.env }}" | base64 -d >> "$GITHUB_ENV"
 
       - name: Checkout armbian/build
         uses: actions/checkout@v4
@@ -86,127 +90,178 @@ jobs:
       - name: Apply patches
         if: env.PATCHES != ''
         run: |
-          curl -L -O "https://github.com/armbian/build/pull/{${PATCHES}}.patch"
-          for file in *.patch; do
-            patch --batch -p1 -N <"$file"
+          set -euo pipefail
+          IFS=',' read -ra patch_ids <<< "${PATCHES}"
+          for patch_id in "${patch_ids[@]}"; do
+            patch_file="pr-${patch_id}.patch"
+            echo "::group::Download ${patch_file}"
+            curl -fsSL -o "${patch_file}" "https://github.com/armbian/build/pull/${patch_id}.patch"
+            test -s "${patch_file}" || { echo "::error::Downloaded patch ${patch_id} is empty"; exit 1; }
+            echo "::endgroup::"
+            echo "::group::Applying ${patch_file}"
+            patch --batch -p1 -N < "${patch_file}" || echo "Patch ${patch_file} applied with warnings or already applied"
+            echo "::endgroup::"
           done
 
-      - name: Install dependencies and set up binfmt
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y qemu-user-static || true
-          sudo modprobe binfmt_misc 2>/dev/null || true
-          sudo mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc 2>/dev/null || true
-          # Create binfmt descriptor only for arm (S805 is armhf, 32-bit ARM)
-          if [ ! -f "/usr/share/binfmts/qemu-arm" ]; then
-            cat > "/usr/share/binfmts/qemu-arm" <<'DESCRIPTOR'
-          package qemu-user-static
-          interpreter /usr/bin/qemu-arm-static
-          magic \x7f\x45\x4c\x46
-          offset 0
-          mask \xff\xff\xff\xff\x00\x00\x00\x00\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff
-          credentials yes
-          fix_binary no
-          preserve yes
-          DESCRIPTOR
-          fi
-          # Create arch-test wrapper
-          sudo tee /usr/local/bin/arch-test > /dev/null <<'WRAPPER'
-          #!/bin/bash
-          for arg in "$@"; do
-            if [ -e "/proc/sys/fs/binfmt_misc/qemu-arm" ] && grep -q "enabled" "/proc/sys/fs/binfmt_misc/qemu-arm" 2>/dev/null; then
-              echo "${arg}: supported"
-            else
-              echo "${arg}: not supported" >&2
-              exit 1
-            fi
-          done
-          WRAPPER
-          sudo chmod +x /usr/local/bin/arch-test
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ${{ runner.os }}-ccache-${{ matrix.BRANCH }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-ccache-${{ matrix.BRANCH }}-
 
-      - name: Verify binfmt support
+      - name: Build kernel debs
         run: |
-          echo "=== binfmt_misc ===" && ls /proc/sys/fs/binfmt_misc/qemu-arm 2>/dev/null && echo "qemu-arm: OK" || echo "qemu-arm: not found"
-          echo "=== arch-test ===" && arch-test armhf 2>/dev/null && echo "armhf: OK" || echo "armhf: not available"
-
-      - name: Build image
-        run: |
+          set -euo pipefail
           export GITHUB_ACTIONS=false
-          sudo --preserve-env \
-            ./compile.sh build \
-              ALLOW_ROOT=yes \
-              BOARD=onecloud \
-              BRANCH=current \
-              RELEASE=${{ matrix.RELEASE }} \
-              BUILD_MINIMAL=yes \
-              BUILD_DESKTOP=no \
-              KERNEL_CONFIGURE=no \
-              EXPERT=yes \
-              USE_CCACHE=no \
-              COMPRESS_OUTPUTIMAGE=img
-          sudo chown $(id -u):$(id -g) -R output/
+          mkdir -p .ccache
+          ./compile.sh kernel \
+            ALLOW_ROOT=yes BOARD=onecloud BRANCH=${{ matrix.BRANCH }} \
+            EXPERT=yes USE_CCACHE=yes CCACHE_DIR="$(pwd)/.ccache" SKIP_INIT_BINFMTS=yes
+          sudo chown "$(id -u):$(id -g)" -R output/
+          sudo chown "$(id -u):$(id -g)" -R .ccache
 
-      - name: Install dependencies
+      - name: Upload kernel artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: debs-${{ matrix.BRANCH }}
+          path: output/debs/
+          retention-days: 1
+
+  build-images:
+    name: Build ${{ matrix.RELEASE }}
+    needs: [prepare, build-kernel]
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        BRANCH: [current]
+        RELEASE: [trixie, resolute]
+    steps:
+      - name: Import env
+        run: echo "${{ needs.prepare.outputs.env }}" | base64 -d >> "$GITHUB_ENV"
+
+      - name: Checkout armbian/build
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.ARMBIAN_REPO }}
+          ref: ${{ env.ARMBIAN_SHA }}
+
+      - name: Apply patches
+        if: env.PATCHES != ''
         run: |
-          sudo apt install -y img2simg
-          ver="v0.3.1"
-          curl -L -o ./AmlImg https://github.com/hzyitc/AmlImg/releases/download/$ver/AmlImg_${ver}_linux_amd64
+          set -euo pipefail
+          IFS=',' read -ra patch_ids <<< "${PATCHES}"
+          for patch_id in "${patch_ids[@]}"; do
+            patch_file="pr-${patch_id}.patch"
+            echo "::group::Download ${patch_file}"
+            curl -fsSL -o "${patch_file}" "https://github.com/armbian/build/pull/${patch_id}.patch"
+            test -s "${patch_file}" || { echo "::error::Downloaded patch ${patch_id} is empty"; exit 1; }
+            echo "::endgroup::"
+            echo "::group::Applying ${patch_file}"
+            patch --batch -p1 -N < "${patch_file}" || echo "Patch ${patch_file} applied with warnings"
+            echo "::endgroup::"
+          done
+
+      - name: Download kernel debs
+        uses: actions/download-artifact@v4
+        with:
+          name: debs-${{ matrix.BRANCH }}
+          path: output/debs/
+
+      - name: Install host tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y qemu-user-static binfmt-support arch-test \
+            debootstrap systemd-container ca-certificates img2simg
+          sudo update-binfmts --enable qemu-arm || true
+
+      - name: Compile Armbian image
+        run: |
+          set -euo pipefail
+          export GITHUB_ACTIONS=false
+          ./compile.sh build \
+            ALLOW_ROOT=yes PREFER_Docker=no BOARD=onecloud BRANCH=${{ matrix.BRANCH }} \
+            RELEASE=${{ matrix.RELEASE }} KERNEL_CONFIGURE=no EXPERT=yes \
+            SKIP_EXTERNAL_TOOLCHAINS=yes USE_CCACHE=no SKIP_INIT_BINFMTS=no \
+            BUILD_MINIMAL=yes BUILD_DESKTOP=no \
+            COMPRESS_OUTPUTIMAGE=img
+          sudo chown "$(id -u):$(id -g)" -R output/
+
+      - name: Download u-boot and create burn image
+        id: postprocess
+        run: |
+          set -euo pipefail
+          curl -fsSL -o ./AmlImg https://github.com/hzyitc/AmlImg/releases/download/v0.3.1/AmlImg_v0.3.1_linux_amd64
           chmod +x ./AmlImg
-
-      - name: Download u-boot
-        run: |
-          curl -L -o ./uboot.img https://github.com/${UBOOT_REPO}/releases/download/${UBOOT_TAG}/${UBOOT_BURNIMG}
+          curl -fsSL -o ./uboot.img "https://github.com/${UBOOT_REPO}/releases/download/${UBOOT_TAG}/${UBOOT_BURNIMG}"
+          rm -rf burn
           ./AmlImg unpack ./uboot.img burn/
-
-      - name: Create burn image
-        run: |
-          diskimg=$(ls output/images/*.img)
-          loop=$(sudo losetup --find --show --partscan $diskimg)
-          sudo img2simg ${loop}p1 burn/boot.simg
-          sudo img2simg ${loop}p2 burn/rootfs.simg
-          sudo losetup -d $loop
-          sudo chown $(id -u):$(id -g) -R burn/
-
-          echo -n "sha1sum $(sha1sum burn/boot.simg | awk '{print $1}')" >burn/boot.VERIFY
-          echo -n "sha1sum $(sha1sum burn/rootfs.simg | awk '{print $1}')" >burn/rootfs.VERIFY
-
-          cat <<EOF >>burn/commands.txt
+          diskimg="$(find output/images -maxdepth 1 -type f -name '*.img' ! -name '*.burn.img' | head -n 1 || true)"
+          [ -n "${diskimg}" ] || { echo "::error::No raw .img found"; exit 1; }
+          loop=""
+          cleanup() {
+            if [ -n "${loop}" ]; then
+              sudo losetup -d "${loop}" || true
+            fi
+          }
+          trap cleanup EXIT
+          loop="$(sudo losetup --find --show --partscan "${diskimg}")"
+          sudo img2simg "${loop}p1" burn/boot.simg
+          sudo img2simg "${loop}p2" burn/rootfs.simg
+          echo -n "sha1sum $(sha1sum burn/boot.simg | awk '{print $1}')" > burn/boot.VERIFY
+          echo -n "sha1sum $(sha1sum burn/rootfs.simg | awk '{print $1}')" > burn/rootfs.VERIFY
+          cat <<EOF >> burn/commands.txt
           PARTITION:boot:sparse:boot.simg
           VERIFY:boot:normal:boot.VERIFY
           PARTITION:rootfs:sparse:rootfs.simg
           VERIFY:rootfs:normal:rootfs.VERIFY
           EOF
-
-          prefix=$(ls output/images/*.img | sed 's/\.img$//')
-          burnimg=${prefix}.burn.img
-          ./AmlImg pack $burnimg burn/
+          # Get version info
+          DEB_FILE="$(find output/debs -maxdepth 1 -type f -name 'linux-image-*_*.deb' | head -n 1 || true)"
+          if [ -z "${DEB_FILE}" ]; then
+            DEB_FILE="$(find output/debs -maxdepth 1 -type f -name 'linux-image-*.deb' | head -n 1 || true)"
+          fi
+          FILENAME="$(basename "${DEB_FILE}" .deb)"
+          if [[ "${FILENAME}" =~ _([0-9]+\.[0-9]+\.[0-9]+(-trunk)?)_ ]]; then
+            ARMBIAN_VER="${BASH_REMATCH[1]}"
+          else
+            ARMBIAN_VER="26.08.0"
+          fi
+          if [[ "${FILENAME}" =~ _([0-9]+\.[0-9]+\.[0-9]+) ]]; then
+            REAL_KERNEL="${BASH_REMATCH[1]}"
+          else
+            REAL_KERNEL="$(echo "${FILENAME}" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | tail -n1 || true)"
+            [ -n "${REAL_KERNEL}" ] || REAL_KERNEL="6.12.28"
+          fi
+          BASE_NAME="Armbian-unofficial_${ARMBIAN_VER}-trunk_Onecloud_${{ matrix.RELEASE }}_current_${REAL_KERNEL}_minimal"
+          ./AmlImg pack "output/images/${BASE_NAME}.burn.img" burn/
+          mv "${diskimg}" "output/images/${BASE_NAME}.img"
+          echo "armbian_ver=${ARMBIAN_VER}" >> "$GITHUB_OUTPUT"
+          echo "kernel_ver=${REAL_KERNEL}" >> "$GITHUB_OUTPUT"
 
       - name: Hash and compress
         run: |
-          for f in output/images/*.img; do
-            sha256sum "$f" | tee -a sha256sum
-            xz --threads=0 --compress "$f"
+          set -euo pipefail
+          cd output/images/
+          for f in *.img; do
+            [ -f "${f}" ] || continue
+            sha256sum "${f}" | tee -a sha256sums.txt
+            xz -9 --threads=0 "${f}"
           done
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.RELEASE }}-burn-img
-          path: |
-            output/images/*
-            sha256sum
-
-      - name: Generate release information
-        run: |
-          cat <<EOF | sed -E 's/^  //' | tee Release.md
-            $(cat sha256sum | awk '{printf "%s: \`%s\`\n", $2, $1}')
-          EOF
 
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ env.TAG }}
+          tag_name: ${{ needs.prepare.outputs.tag }}
           append_body: true
-          body_path: Release.md
+          body: |
+            ---
+            ### ${{ matrix.RELEASE }} minimal
+            - **Armbian**: `${{ steps.postprocess.outputs.armbian_ver }}`
+            - **Kernel**: `${{ steps.postprocess.outputs.kernel_ver }}`
           files: |
-            output/images/*
+            output/images/*.xz
+            output/images/sha256sums.txt
