@@ -137,7 +137,7 @@ jobs:
       fail-fast: false
       matrix:
         BRANCH: [current]
-        RELEASE: [trixie, jammy]
+        RELEASE: [trixie, resolute]
     steps:
       - name: Import env
         run: echo "${{ needs.prepare.outputs.env }}" | base64 -d >> "$GITHUB_ENV"
@@ -177,6 +177,12 @@ jobs:
           sudo apt-get install -y qemu-user-static binfmt-support arch-test \
             debootstrap systemd-container ca-certificates img2simg
           sudo update-binfmts --enable qemu-arm || true
+
+      - name: Fix resolute Rust coreutils QEMU crash
+        if: matrix.RELEASE == 'resolute'
+        run: |
+          # Replace chroot ln command with host-side ln (avoids Rust coreutils crash under QEMU)
+          sed -i 's|LC_ALL="C" LANG="C" LANGUAGE="" SUDO_USER="" chroot "${basedir}" /bin/bash -c "ln -fs armbian-archive-keyring.gpg /usr/share/keyrings/armbian.gpg"|ln -fs armbian-archive-keyring.gpg "${basedir}/usr/share/keyrings/armbian.gpg"|g' lib/functions/rootfs/distro-specific.sh
 
       - name: Compile Armbian image
         run: |
