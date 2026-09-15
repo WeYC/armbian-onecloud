@@ -214,9 +214,6 @@ jobs:
           - minimal
           - cli
           - desktop
-        exclude:
-          - RELEASE: resolute
-            TYPE: cli
         include:
           - TYPE: desktop
             DESKTOP_ENVIRONMENT: xfce
@@ -251,6 +248,8 @@ jobs:
         if: matrix.RELEASE == 'resolute'
         run: |
           sed -i 's|LC_ALL="C" LANG="C" LANGUAGE="" SUDO_USER="" chroot "${basedir}" /bin/bash -c "ln -fs armbian-archive-keyring.gpg /usr/share/keyrings/armbian.gpg"|ln -fs armbian-archive-keyring.gpg "${basedir}/usr/share/keyrings/armbian.gpg"|g' lib/functions/rootfs/distro-specific.sh
+          # Remove zz-busybox-initramfs hook to avoid QEMU segfault during update-initramfs
+          sed -i '/chroot_custom_long_running "\$chroot_target" "\$update_initramfs_cmd"/i\\tchroot_custom "$chroot_target" rm -f /usr/share/initramfs-tools/hooks/zz-busybox-initramfs' lib/functions/image/initrd.sh
 
       - name: Download debs
         uses: actions/download-artifact@v4
