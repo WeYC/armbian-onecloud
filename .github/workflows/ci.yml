@@ -244,6 +244,11 @@ jobs:
             echo "::endgroup::"
           done
 
+      - name: Fix resolute Rust coreutils QEMU crash
+        if: matrix.RELEASE == 'resolute'
+        run: |
+          sed -i 's|LC_ALL="C" LANG="C" LANGUAGE="" SUDO_USER="" chroot "${basedir}" /bin/bash -c "ln -fs armbian-archive-keyring.gpg /usr/share/keyrings/armbian.gpg"|ln -fs armbian-archive-keyring.gpg "${basedir}/usr/share/keyrings/armbian.gpg"|g' lib/functions/rootfs/distro-specific.sh
+
       - name: Download debs
         uses: actions/download-artifact@v4
         with:
