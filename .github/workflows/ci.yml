@@ -214,6 +214,9 @@ jobs:
           - minimal
           - cli
           - desktop
+        exclude:
+          - RELEASE: resolute
+            TYPE: cli
         include:
           - TYPE: desktop
             DESKTOP_ENVIRONMENT: xfce
