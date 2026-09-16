@@ -285,16 +285,17 @@ jobs:
               USE_CCACHE=no \
               COMPRESS_OUTPUTIMAGE=img || true
           sudo chown $(id -u):$(id -g) -R output/
-          # Check if image was generated (default: true, push events always check)
-          CHECK_IMAGE="${{ inputs.check_image == '' && 'true' || inputs.check_image }}"
-          if [[ "$CHECK_IMAGE" == "true" ]]; then
-            if ! ls output/images/*.img 2>/dev/null; then
-              echo "::error::No image file found, build failed"
-              exit 1
-            fi
+        continue-on-error: true
+
+      - name: Check image
+        if: inputs.check_image != false
+        run: |
+          if ls output/images/*.img 2>/dev/null; then
             echo "Image check passed"
+            ls -la output/images/*.img
           else
-            echo "Image check skipped"
+            echo "::error::No image file found, build failed"
+            exit 1
           fi
 
       - name: Install Dependents
