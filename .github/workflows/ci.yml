@@ -2,6 +2,12 @@ name: CI
 
 on:
   workflow_dispatch:
+    inputs:
+      check_image:
+        description: 'Check if image was generated after build'
+        required: false
+        default: true
+        type: boolean
   push:
     branches:
       - readme
@@ -279,6 +285,17 @@ jobs:
               USE_CCACHE=no \
               COMPRESS_OUTPUTIMAGE=img || true
           sudo chown $(id -u):$(id -g) -R output/
+          # Check if image was generated (default: true, push events always check)
+          CHECK_IMAGE="${{ inputs.check_image == '' && 'true' || inputs.check_image }}"
+          if [[ "$CHECK_IMAGE" == "true" ]]; then
+            if ! ls output/images/*.img 2>/dev/null; then
+              echo "::error::No image file found, build failed"
+              exit 1
+            fi
+            echo "Image check passed"
+          else
+            echo "Image check skipped"
+          fi
 
       - name: Install Dependents
         run: |
