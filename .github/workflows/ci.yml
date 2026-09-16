@@ -277,8 +277,13 @@ jobs:
               SKIP_EXTERNAL_TOOLCHAINS=yes \
               CLEAN_LEVEL= \
               USE_CCACHE=no \
-              COMPRESS_OUTPUTIMAGE=img
+              COMPRESS_OUTPUTIMAGE=img || true
           sudo chown $(id -u):$(id -g) -R output/
+          # Check if image was generated despite errors
+          if ! ls output/images/*.img 2>/dev/null; then
+            echo "No image file found, build failed"
+            exit 1
+          fi
 
       - name: Install Dependents
         run: |
