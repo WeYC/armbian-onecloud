@@ -2,12 +2,6 @@ name: CI
 
 on:
   workflow_dispatch:
-    inputs:
-      check_image:
-        description: 'Check if image was generated after build'
-        required: false
-        default: true
-        type: boolean
   push:
     branches:
       - readme
@@ -31,27 +25,19 @@ permissions:
 jobs:
   prepare:
     name: Prepare
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
     outputs:
       env: ${{ steps.get.outputs.env }}
     steps:
       - id: get
         name: Get repositories information
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          api_get() {
-            curl -fsSL \
-              -H "Authorization: Bearer ${GH_TOKEN}" \
-              -H "Accept: application/vnd.github+json" \
-              "$1"
-          }
-          TIME="$(api_get "https://api.github.com/repos/${SCRIPT_REPO}/actions/runs/${GITHUB_RUN_ID}" | jq -r '.created_at // empty' || true)"
+          TIME="$(curl https://api.github.com/repos/${SCRIPT_REPO}/actions/runs/${GITHUB_RUN_ID} | jq -r .created_at)"
           TAG="ci-$(date -d "${TIME}" -u +'%Y%m%d-%H%M%S-%Z')"
 
-          SCRIPT_SHA=$(api_get "https://api.github.com/repos/${SCRIPT_REPO}/commits/${SCRIPT_REF}" | jq -r '.sha // empty' || true)
-          UBOOT_TAG=$(api_get "https://api.github.com/repos/${UBOOT_REPO}/releases/${UBOOT_RELEASE}" | jq -r '.tag_name // empty' || true)
-          ARMBIAN_SHA=$(api_get "https://api.github.com/repos/${ARMBIAN_REPO}/commits/${ARMBIAN_REF}" | jq -r '.sha // empty' || true)
+          SCRIPT_SHA=$(curl https://api.github.com/repos/${SCRIPT_REPO}/commits/${SCRIPT_REF} | jq -r .sha)
+          UBOOT_TAG=$(curl https://api.github.com/repos/${UBOOT_REPO}/releases/${UBOOT_RELEASE} | jq -r .tag_name)
+          ARMBIAN_SHA=$(curl https://api.github.com/repos/${ARMBIAN_REPO}/commits/${ARMBIAN_REF} | jq -r .sha)
 
           cat <<EOF | sed -E 's/^  //' >>$GITHUB_ENV
             TIME=$TIME
@@ -138,7 +124,7 @@ jobs:
   build-debs:
     name: Build ${{ matrix.BRANCH }}
     needs: prepare
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
       matrix:
@@ -198,7 +184,7 @@ jobs:
   build:
     name: Build ${{ matrix.RELEASE }}-${{ matrix.BRANCH }}-${{ matrix.TYPE == 'desktop' && matrix.DESKTOP_ENVIRONMENT || matrix.TYPE }}
     needs: [ prepare, build-debs ]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
       matrix:
@@ -224,7 +210,7 @@ jobs:
           - TYPE: desktop
             DESKTOP_ENVIRONMENT: xfce
             DESKTOP_ENVIRONMENT_CONFIG_NAME: config_base
-            DESKTOP_APPGROUPS_SELECTED: "mid"
+            DESKTOP_APPGROUPS_SELECTED: ""
 
     steps:
       - name: Import env
@@ -249,13 +235,6 @@ jobs:
             patch --batch -p1 -N <"$file"
             echo "::endgroup::"
           done
-
-      - name: Fix resolute Rust coreutils QEMU crash
-        if: matrix.RELEASE == 'resolute'
-        run: |
-          sed -i 's|LC_ALL="C" LANG="C" LANGUAGE="" SUDO_USER="" chroot "${basedir}" /bin/bash -c "ln -fs armbian-archive-keyring.gpg /usr/share/keyrings/armbian.gpg"|ln -fs armbian-archive-keyring.gpg "${basedir}/usr/share/keyrings/armbian.gpg"|g' lib/functions/rootfs/distro-specific.sh
-          # Remove problematic initramfs hooks to avoid QEMU segfault/abort
-          sed -i '/chroot_custom_long_running "\$chroot_target" "\$update_initramfs_cmd"/i\\tchroot_custom "$chroot_target" rm -f /usr/share/initramfs-tools/hooks/zz-busybox-initramfs /usr/share/initramfs-tools/hooks/plymouth /usr/share/initramfs-tools/hooks/udev' lib/functions/image/initrd.sh
 
       - name: Download debs
         uses: actions/download-artifact@v8
@@ -283,20 +262,8 @@ jobs:
               SKIP_EXTERNAL_TOOLCHAINS=yes \
               CLEAN_LEVEL= \
               USE_CCACHE=no \
-              COMPRESS_OUTPUTIMAGE=img || true
+              COMPRESS_OUTPUTIMAGE=img
           sudo chown $(id -u):$(id -g) -R output/
-        continue-on-error: true
-
-      - name: Check image
-        if: inputs.check_image != false
-        run: |
-          if ls output/images/*.img 2>/dev/null; then
-            echo "Image check passed"
-            ls -la output/images/*.img
-          else
-            echo "::error::No image file found, build failed"
-            exit 1
-          fi
 
       - name: Install Dependents
         run: |
