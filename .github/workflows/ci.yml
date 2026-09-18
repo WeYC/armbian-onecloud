@@ -31,13 +31,21 @@ jobs:
     steps:
       - id: get
         name: Get repositories information
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TIME="$(curl https://api.github.com/repos/${SCRIPT_REPO}/actions/runs/${GITHUB_RUN_ID} | jq -r .created_at)"
+          api_get() {
+            curl -fsSL \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "$1"
+          }
+          TIME="$(api_get "https://api.github.com/repos/${SCRIPT_REPO}/actions/runs/${GITHUB_RUN_ID}" | jq -r '.created_at // empty' || true)"
           TAG="ci-$(date -d "${TIME}" -u +'%Y%m%d-%H%M%S-%Z')"
 
-          SCRIPT_SHA=$(curl https://api.github.com/repos/${SCRIPT_REPO}/commits/${SCRIPT_REF} | jq -r .sha)
-          UBOOT_TAG=$(curl https://api.github.com/repos/${UBOOT_REPO}/releases/${UBOOT_RELEASE} | jq -r .tag_name)
-          ARMBIAN_SHA=$(curl https://api.github.com/repos/${ARMBIAN_REPO}/commits/${ARMBIAN_REF} | jq -r .sha)
+          SCRIPT_SHA=$(api_get "https://api.github.com/repos/${SCRIPT_REPO}/commits/${SCRIPT_REF}" | jq -r '.sha // empty' || true)
+          UBOOT_TAG=$(api_get "https://api.github.com/repos/${UBOOT_REPO}/releases/${UBOOT_RELEASE}" | jq -r '.tag_name // empty' || true)
+          ARMBIAN_SHA=$(api_get "https://api.github.com/repos/${ARMBIAN_REPO}/commits/${ARMBIAN_REF}" | jq -r '.sha // empty' || true)
 
           cat <<EOF | sed -E 's/^  //' >>$GITHUB_ENV
             TIME=$TIME
