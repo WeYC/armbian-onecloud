@@ -273,7 +273,8 @@ jobs:
 
       - name: Install Dependents
         run: |
-          sudo apt install img2simg
+          sudo apt-get update
+          sudo apt-get install -y android-sdk-libsparse-utils
 
           ver="v0.3.1"
           curl -L -o ./AmlImg https://github.com/hzyitc/AmlImg/releases/download/$ver/AmlImg_${ver}_linux_amd64
