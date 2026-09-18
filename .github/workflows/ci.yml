@@ -209,8 +209,7 @@ jobs:
         include:
           - TYPE: desktop
             DESKTOP_ENVIRONMENT: xfce
-            DESKTOP_ENVIRONMENT_CONFIG_NAME: config_base
-            DESKTOP_APPGROUPS_SELECTED: ""
+            DESKTOP_TIER: mid
 
     steps:
       - name: Import env
@@ -256,8 +255,7 @@ jobs:
               BUILD_MINIMAL=${{ matrix.TYPE == 'minimal' && 'yes' || 'no' }} \
               BUILD_DESKTOP=${{ matrix.TYPE == 'desktop' && 'yes' || 'no' }} \
               DESKTOP_ENVIRONMENT=${{ matrix.DESKTOP_ENVIRONMENT }} \
-              DESKTOP_ENVIRONMENT_CONFIG_NAME=${{ matrix.DESKTOP_ENVIRONMENT_CONFIG_NAME }} \
-              DESKTOP_APPGROUPS_SELECTED=${{ matrix.DESKTOP_APPGROUPS_SELECTED }} \
+              DESKTOP_TIER=${{ matrix.DESKTOP_TIER }} \
               EXPERT=yes \
               SKIP_EXTERNAL_TOOLCHAINS=yes \
               CLEAN_LEVEL= \
