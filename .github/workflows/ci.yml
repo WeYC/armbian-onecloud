@@ -128,7 +128,7 @@ jobs:
           tail --line=+2 Release.md >Body.md
 
       - name: Create release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.TAG }}
           target_commitish: ${{ github.sha }}
@@ -151,7 +151,7 @@ jobs:
           echo "$(echo "${{ needs.prepare.outputs.env }}" | base64 -d)" >>$GITHUB_ENV
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ${{ env.ARMBIAN_REPO }}
           ref: ${{ env.ARMBIAN_SHA }}
@@ -183,13 +183,13 @@ jobs:
           sudo chown $(id -u):$(id -g) -R output/
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: debs-${{ matrix.BRANCH }}
           path: output/debs/*
 
       - name: Upload to release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.TAG }}
           files: |
@@ -232,7 +232,7 @@ jobs:
           echo "$(echo "${{ needs.prepare.outputs.env }}" | base64 -d)" >>$GITHUB_ENV
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ${{ env.ARMBIAN_REPO }}
           ref: ${{ env.ARMBIAN_SHA }}
@@ -258,7 +258,7 @@ jobs:
           sed -i '/chroot_custom_long_running "\$chroot_target" "\$update_initramfs_cmd"/i\\tchroot_custom "$chroot_target" rm -f /usr/share/initramfs-tools/hooks/zz-busybox-initramfs /usr/share/initramfs-tools/hooks/plymouth /usr/share/initramfs-tools/hooks/udev' lib/functions/image/initrd.sh
 
       - name: Download debs
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: debs-${{ matrix.BRANCH }}
           path: output/debs/
@@ -361,7 +361,7 @@ jobs:
           EOF
 
       - name: Upload to release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.TAG }}
           append_body: true
